@@ -20,6 +20,7 @@ use segment::types::{
     HnswConfig, Indexes, PayloadFieldSchema, PayloadKeyType, PayloadStorageType, PointIdType,
     QuantizationConfig, SegmentConfig, VectorStorageType,
 };
+use sysinfo::{DiskExt, System, SystemExt};
 
 use crate::collection_manager::holders::proxy_segment::ProxySegment;
 use crate::collection_manager::holders::segment_holder::{
@@ -36,6 +37,18 @@ pub struct OptimizerThresholds {
     pub max_segment_size_kb: usize,
     pub memmap_threshold_kb: usize,
     pub indexing_threshold_kb: usize,
+}
+
+fn available_disk_space(path: &Path) -> u64 {
+    let mut sys = System::new_all();
+    sys.refresh_disks_list();
+
+    for disk in sys.disks() {
+        if disk.mount_point() == path {
+            return disk.available_space();
+        }
+    }
+    0
 }
 
 /// SegmentOptimizer - trait implementing common functionality of the optimizers
@@ -142,6 +155,17 @@ pub trait SegmentOptimizer {
             .max()
             .copied()
             .unwrap_or(0);
+
+        // Estimate required disk space
+        let required_space = maximal_vector_store_size_bytes;
+
+        // Check available disk space
+        let available_space = available_disk_space(self.temp_path());
+        if available_space < required_space as u64 {
+            return Err(CollectionError::service_error(
+                "Not enough disk space for optimization".to_string(),
+            ));
+        }
 
         let thresholds = self.threshold_config();
         let collection_params = self.collection_params();
